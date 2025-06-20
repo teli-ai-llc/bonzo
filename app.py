@@ -7,7 +7,7 @@ from aiohttp import ClientSession
 from openai import OpenAIError, RateLimitError, AsyncOpenAI
 from modal import Image, App, Secret, asgi_app
 
-from user_schema import user_schema
+from prospect_schema import prospect_schema
 
 from repository.context import MessageContextBonzo
 
@@ -193,9 +193,9 @@ async def gpt_response(message_history, user_message, contexts=None, goal=None, 
     try:
 
         if scope == "all":
-            user_schema_changes, user_schema_token_usage = await gpt_schema_update(aclient, "user", user_schema or {}, user_message)
-        elif scope == "user_info":
-            user_schema_changes, user_schema_token_usage = await gpt_schema_update(aclient, "user", user_schema or {}, user_message)
+            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", prospect_schema or {}, user_message)
+        elif scope == "prospect_info":
+            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", prospect_schema or {}, user_message)
 
         change_log = ""
 
@@ -258,18 +258,17 @@ async def gpt_response(message_history, user_message, contexts=None, goal=None, 
             parsed_sentiment.conversation_status = "out_of_scope"
 
         total_response_tokens = token_usage.get("total_tokens", 0)
-        total_user_schema_tokens = user_schema_token_usage.get("total_tokens", 0)
-        # total_loan_tokens = loan_token_usage.get("total_tokens", 0)
+        total_prospect_schema_tokens = prospect_schema_token_usage.get("total_tokens", 0)
 
         return {
             "response": parsed_sentiment.response,
             "conversation_status": parsed_sentiment.conversation_status,  # Tracks 'conversation_over', 'human_intervention', 'continue_conversation', 'out_of_scope'
             "changes": {
-                "user_schema_data": user_schema_changes,
+                "prospect_schema_data": prospect_schema_changes,
             },
             "token_usage": {
                 "response_tokens": total_response_tokens,
-                "user_schema_tokens": total_user_schema_tokens,
+                "prospect_schema_tokens": total_prospect_schema_tokens,
             }
         }
 
