@@ -7,9 +7,9 @@ from botocore.exceptions import ClientError
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class MessageContext:
+class MessageContextBonzo:
     def __init__(self):
-        self.table_name = "message_context"
+        self.table_name = "message_context_bonzo"
         self.table = get_dynamo_table(self.table_name)
 
     def get(self, id):
