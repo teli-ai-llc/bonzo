@@ -266,10 +266,10 @@ async def gpt_response(message_history, user_message, contexts=None, goal=None, 
             "changes": {
                 "prospect_schema_data": prospect_schema_changes,
             },
-            "token_usage": {
-                "response_tokens": total_response_tokens,
-                "prospect_schema_tokens": total_prospect_schema_tokens,
-            }
+            # "token_usage": {
+            #     "response_tokens": total_response_tokens,
+            #     "prospect_schema_tokens": total_prospect_schema_tokens,
+            # }
         }
 
     except RateLimitError as e:
