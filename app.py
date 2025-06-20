@@ -7,7 +7,9 @@ from aiohttp import ClientSession
 from openai import OpenAIError, RateLimitError, AsyncOpenAI
 from modal import Image, App, Secret, asgi_app
 
-from repository.context import MessageContext
+from user_schema import user_schema
+
+from repository.context import MessageContextBonzo
 
 quart_app = Quart(__name__)
 quart_app = cors(
@@ -30,7 +32,7 @@ image = (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-context_store = MessageContext()
+context_store = MessageContextBonzo()
 
 def get_api_key():
     return os.environ.get("API_KEY")
@@ -128,7 +130,7 @@ async def gpt_schema_update(aclient, schema_type: str, original: dict, user_mess
                 "Your task is to extract ONLY the fields clearly mentioned in the message and return them as a nested object.\n"
                 "- If a field is mentioned, include it in the result with its new value.\n"
                 "- If a field is not mentioned, do not include it.\n"
-                "- If a field is nested (inside another object), return it as a nested object (e.g. { \"solar\": { \"firstName\": \"John\" } }).\n"
+                # "- If a field is nested (inside another object), return it as a nested object (e.g. { \"solar\": { \"firstName\": \"John\" } }).\n"
                 "- If the same field name appears in multiple places in the schema, nest it correctly inside its parent object. Do not use dot notation. For example: { \"solar\": { \"firstName\": \"John\" } }.\n"
                 "- If the user message provides general personal information (e.g. name, phone, email) without specifying context, map it to the most general applicant-level fields first (e.g. \"loanApplicant.firstName\" if applicable).\n"
                 "- Do not make assumptions. If the user message is ambiguous, only extract fields when there is a clear match. Otherwise leave them out.\n\n"
@@ -188,21 +190,12 @@ async def gpt_schema_update(aclient, schema_type: str, original: dict, user_mess
         return {}, token_usage
 
 async def gpt_response(message_history, user_message, contexts=None, goal=None, tone_instructions=None, scope="all"):
-    # aclient = client
-
-    # lead_data, loan_application_model = await get_lead_info(lead_id, loan_id) if lead_id and loan_id else (None, None)
-
     try:
 
-        # if scope == "all":
-        #     lead_changes, lead_token_usage = await gpt_schema_update(aclient, "lead", lead_schema or {}, user_message)
-        #     loan_changes, loan_token_usage = await gpt_schema_update(aclient, "loan", loan_schema or {}, user_message)
-        # elif scope == "lead_info":
-        #     lead_changes, lead_token_usage = await gpt_schema_update(aclient, "lead", lead_schema or {}, user_message)
-        #     loan_changes, loan_token_usage = {}, {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
-        # elif scope == "loan_info":
-        #     lead_changes, lead_token_usage = {}, {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
-        #     loan_changes, loan_token_usage = await gpt_schema_update(aclient, "loan", loan_schema or {}, user_message)
+        if scope == "all":
+            user_schema_changes, user_schema_token_usage = await gpt_schema_update(aclient, "user", user_schema or {}, user_message)
+        elif scope == "user_info":
+            user_schema_changes, user_schema_token_usage = await gpt_schema_update(aclient, "user", user_schema or {}, user_message)
 
         change_log = ""
 
@@ -264,22 +257,20 @@ async def gpt_response(message_history, user_message, contexts=None, goal=None, 
         if "I'm not sure" in parsed_sentiment.response or "I can't help with that" in parsed_sentiment.response:
             parsed_sentiment.conversation_status = "out_of_scope"
 
-        # total_response_tokens = token_usage.get("total_tokens", 0)
-        # total_lead_tokens = lead_token_usage.get("total_tokens", 0)
+        total_response_tokens = token_usage.get("total_tokens", 0)
+        total_user_schema_tokens = user_schema_token_usage.get("total_tokens", 0)
         # total_loan_tokens = loan_token_usage.get("total_tokens", 0)
 
         return {
             "response": parsed_sentiment.response,
             "conversation_status": parsed_sentiment.conversation_status,  # Tracks 'conversation_over', 'human_intervention', 'continue_conversation', 'out_of_scope'
             "changes": {
-                # "lead_schema_data": lead_changes,
-                # "loan_schema_data": loan_changes
+                "user_schema_data": user_schema_changes,
             },
-            # "token_usage": {
-            #     "response_tokens": total_response_tokens,
-            #     "lead_schema_tokens": total_lead_tokens,
-            #     "loan_schema_tokens": total_loan_tokens
-            # }
+            "token_usage": {
+                "response_tokens": total_response_tokens,
+                "user_schema_tokens": total_user_schema_tokens,
+            }
         }
 
     except RateLimitError as e:
