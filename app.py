@@ -333,7 +333,7 @@ async def message_teli_data():
 # For deployment with Modal
 @modal_app.function(
     image=image,
-    secrets=[Secret.from_name("bonzo-app-secrets")]
+    secrets=[Secret.from_name("bonzo-secrets")]
 )
 @asgi_app()
 def quart_asgi_app():
