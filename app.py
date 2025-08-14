@@ -1,13 +1,12 @@
 from quart_cors import cors
 from functools import wraps
 from pydantic import BaseModel, Field
+from decimal import Decimal
 import os, json, logging, time, dotenv, asyncio
 from quart import Quart, request, jsonify
 from aiohttp import ClientSession
 from openai import OpenAIError, RateLimitError, AsyncOpenAI
 from modal import Image, App, Secret, asgi_app
-
-from prospect_schema import prospect_schema
 
 from repository.context import MessageContextBonzo
 
@@ -54,15 +53,27 @@ async def upload_context():
         data = await request.json
         id = data.get("id")
         context = data.get("context")
+        goal = data.get("goal", None)
+        tone = data.get("tone", None)
+        schema_context = data.get("schema_context", [])
 
         if not id or not context or not isinstance(context, list):
             return jsonify({"error": "Missing required fields: id and context are required."}), 400
 
-        # Save context to DynamoDB
-        await context_store.update_message_context(id, context)
+        if schema_context and not isinstance(schema_context, list):
+            return jsonify({"error": "Invalid schema_context format. It must be a list of schemas."}), 400
+
+        await context_store.update_message_context(id, context, goal, tone, schema_context)
 
         logging.info(f"Context uploaded successfully for id {id}.")
-        return jsonify({"message": "Context uploaded successfully.", "id": id, "context": context}), 200
+        return jsonify({
+            "message": "Context uploaded successfully.",
+            "id": id,
+            "context": context,
+            "goal": goal,
+            "tone": tone,
+            "schema_context": schema_context
+        }), 200
 
     except Exception as e:
         logging.error(f"Error uploading context: {e}")
@@ -193,9 +204,9 @@ async def gpt_response(message_history, user_message, contexts=None, goal=None, 
     try:
 
         if scope == "all":
-            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", prospect_schema or {}, user_message)
+            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", {}, user_message)
         elif scope == "prospect_info":
-            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", prospect_schema or {}, user_message)
+            prospect_schema_changes, prospect_schema_token_usage = await gpt_schema_update(aclient, "prospect", {}, user_message)
 
         change_log = ""
 

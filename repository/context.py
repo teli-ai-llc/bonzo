@@ -18,10 +18,16 @@ class MessageContextBonzo:
             if "Item" in response:
                 item = response["Item"]
                 logging.info(f"Message context for id {id} retrieved successfully.")
-                return item.get("context", [])
+                # Return both context and schema_context (align with lodasoft)
+                return {
+                    "context": item.get("context", []),
+                    "goal": item.get("goal", ""),
+                    "tone": item.get("tone", ""),
+                    "schema_context": item.get("schema_context", [])
+                }
             else:
                 logging.warning(f"No message context found for id {id}.")
-                return []
+                return None
         except ClientError as e:
             logging.error(f"Failed to retrieve message context for id {id}: {e}")
             raise
@@ -30,7 +36,14 @@ class MessageContextBonzo:
         try:
             response = self.table.scan()
             items = response.get("Items", [])
-            contexts = {item["id"]: item.get("context", []) for item in items}
+            contexts = {
+                item["id"]: {
+                    "context": item.get("context", []),
+                    "goal": item.get("goal", ""),
+                    "tone": item.get("tone", ""),
+                    "schema_context": item.get("schema_context", [])
+                } for item in items
+            }
             logging.info("All message contexts retrieved successfully.")
             return contexts
         except ClientError as e:
@@ -39,25 +52,28 @@ class MessageContextBonzo:
 
     def delete(self, id):
         try:
-            self.table.delete_item(Key={"id": id})
+            self.table.delete_item(
+                Key={"id": id},
+                ReturnValues="ALL_OLD"
+            )
             logging.info(f"Message context for id {id} deleted successfully.")
         except ClientError as e:
             logging.error(f"Failed to delete message context for id {id}: {e}")
             raise
 
-    async def update_message_context(self, id, context):
+    async def update_message_context(self, id, context, goal, tone, schema_context):
         try:
-            self.table.put_item(Item={"id": id, "context": context})
-            logging.info(f"Message context for id {id} saved successfully.")
+            # Save both context and schema_context in DynamoDB
+            self.table.put_item(
+                Item={
+                    "id": id,
+                    "context": context,
+                    "goal": goal,
+                    "tone": tone,
+                    "schema_context": schema_context
+                }
+            )
+            logging.info(f"Message context and schema_context for id {id} saved successfully.")
         except ClientError as e:
-            logging.error(f"Failed to save message context for id {id}: {e}")
+            logging.error(f"Failed to save message context and schema_context for id {id}: {e}")
             raise
-
-    def delete_id(self, id):
-        try:
-            self.table.delete_item(Key={"id": id})
-            logging.info(f"Message context for id {id} deleted successfully.")
-            return jsonify({"message": "Message context deleted successfully."}), 200
-        except ClientError as e:
-            logging.error(f"Failed to delete message context for id {id}: {e}")
-            return jsonify({"error": "Failed to delete message context for id."}), 500
