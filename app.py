@@ -1,10 +1,8 @@
 from quart_cors import cors
 from functools import wraps
 from pydantic import BaseModel, Field
-from decimal import Decimal
-import os, json, logging, time, dotenv, asyncio
+import os, json, logging, requests
 from quart import Quart, request, jsonify
-from aiohttp import ClientSession
 from openai import OpenAIError, RateLimitError, AsyncOpenAI
 from modal import Image, App, Secret, asgi_app
 
@@ -339,6 +337,75 @@ async def message_teli_data():
 
     except Exception as e:
         logger.error(f"Error generating response: {e}")
+        return jsonify({"error": str(e)}), 400
+
+class Response(BaseModel):
+    response: str
+
+async def gpt_response_2(message_history, prompt_id) -> dict:
+    try:
+        response = await aclient.beta.chat.completions.parse(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        # f"{prompts[prompt_id]}"
+
+                        # "**Guidelines for Handling Conversations:**\n"
+                        # "- **conversation_over** → Use this only if the user clearly states they have no further questions.\n"
+                        # "- **human_intervention** → Escalate only if the user asks about scheduling, availability, or if no clear answer is found in the provided context.\n"
+                        # "- **continue_conversation** → If the topic allows for further discussion, offer additional insights or ask if the user would like more details.\n"
+                        # "- **out_of_scope** → If the user's question is unrelated, acknowledge it politely and redirect the conversation back to relevant topics.\n\n"
+
+                        # "**Handling Out-of-Scope Questions:**\n"
+                        # "If a user asks something unrelated, respond in a way that maintains a natural flow:\n"
+                        # "👤 User: 'What's the best Italian restaurant nearby?'\n"
+                        # "💬 Response: 'That sounds like a great topic! While I don't have restaurant recommendations, I'd be happy to assist with [specific topic]. Let me know how I can help!'\n\n"
+
+                        # "If the user continues with off-topic questions, acknowledge their curiosity but steer the conversation back in a professional and engaging manner."
+                        # "DO NOT USE EMOTICONS OR EMOJIS IN YOUR RESPONSES EVER.\n\n"
+                    )
+                },
+                {"role": "user", "content": message_history}
+            ],
+            response_format=Response,
+            max_tokens=16384
+        )
+    except Exception as e:
+        logger.error(f"Error generating response: {e}")
+        return jsonify({"error": str(e)}), 400
+
+@quart_app.route('/send_ai_message', methods=['POST'])
+@require_api_key
+async def send_ai_message():
+    try:
+        data = await request.json
+        prospect_id = data.get("prospect_id")
+        message = data.get("message")
+
+        if not all([prospect_id, message]):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        url = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/sms'
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI4IiwianRpIjoiYzE0MzBmMzQ3NzY1NmU5ODQ0MDUwNjA2OTAxYTc3MTNhYTQ1NzcwZTgyMWEzZWIwOWI4ZGIxMjI2YjFiMTJiNjI5NDA5NGE2ZWI3ZmVhNDIiLCJpYXQiOjE3NTYzMTcxODkuNTg1MDUxLCJuYmYiOjE3NTYzMTcxODkuNTg1MDUzLCJleHAiOjE3ODc4NTMxODkuNTcyMjQyLCJzdWIiOiIyNzEyNiIsInNjb3BlcyI6WyJhY2Nlc3MtcHVibGljIiwiYWNjZXNzLWF1dGhlbnRpY2F0ZWQiLCJwcm9zcGVjdHMiLCJwaXBlbGluZXMiLCJjYW1wYWlnbnMiLCJtZXNzYWdpbmciLCJjb252ZXJzYXRpb25zIl19.Sj1Mz6dY4byhmUX80aGvsf5eTXWV2ggzAdKyrR8WcFAe9TZ2MHR5cm2Ljo2r2vbglI7Dr6haibcZbobhBGV3nOyQKQCmu5Dys0AcJppFyXTV_lF0E2yc4ZrDQDBV33PzKVah2_IG4Qt3fAPk4uh4exY13pKbU9pXk0kkH60dvbmnYLviNCEuBvSS-lmtACamMnrS6JVfAFbs7JH873ZCogeNefi0v0GVSs-zcYMLFBFwdsKSwOe0qjKCJUM-Lbzo5l_WiaN9KTsUCKc8zoJAqUSpgtb4U6m9lDb3hFZixOkZfF01CUGlk32SmtzLJKeHk6AgzEZAJeQuni1On88hI3PlSuOtGZeaQRExnM4LaB8wFwqbm-XN4jPAt3GqUu0KUTKXK21AuYGAsJYPYW1fAPk5WevRiiN7AiZ8XImqftPSBckb2Kp9p5qiedQVYSbK35vlF9Em64vtVRR65rkzE9zppkxR_1_nGiRDSPNt4BoVY2rCCzaEBUECxMmqUMsxL4ohOWDsStSKf7X_kh3sN2RGPQaEj0AhLGJpqRC7PrJ9JurxkBY85MZIdNHVDDbBQ_HUHItS96vD7tHo9Lc-eLhFMmp0NsNUQiazGhFSFfRWYilb0Vfg-4wX6_xiEwxMdJM4nbQV51uex10LE0WxjStF-Og0p5VOpkwiOFFKSzQ",
+            "On-Behalf-Of": "rkataoka@bisuhomeloans.com"
+        }
+
+        payload = {
+            "message": message,
+            "send_as": "owner"
+        }
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        return response.json()
+
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
         return jsonify({"error": str(e)}), 400
 
 # For deployment with Modal
