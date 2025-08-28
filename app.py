@@ -1,12 +1,12 @@
 from quart_cors import cors
 from functools import wraps
 from pydantic import BaseModel, Field
-import os, json, logging, requests
+import os, json, logging, aiohttp
 from quart import Quart, request, jsonify
 from openai import OpenAIError, RateLimitError, AsyncOpenAI
 from modal import Image, App, Secret, asgi_app
-
 from repository.context import MessageContextBonzo
+from prompts import prompts
 
 quart_app = Quart(__name__)
 quart_app = cors(
@@ -24,6 +24,7 @@ image = (
     Image.debian_slim()
     .pip_install_from_requirements("requirements.txt")
     .add_local_dir("repository", "/root/repository")
+    .add_local_file("prompts.py", "/root/prompts.py")
 )
 
 # Set up logging
@@ -345,33 +346,30 @@ class Response(BaseModel):
 async def gpt_response_2(message_history, prompt_id) -> dict:
     try:
         response = await aclient.beta.chat.completions.parse(
-            model="gpt-4.1",
+            model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        # f"{prompts[prompt_id]}"
-
-                        # "**Guidelines for Handling Conversations:**\n"
-                        # "- **conversation_over** → Use this only if the user clearly states they have no further questions.\n"
-                        # "- **human_intervention** → Escalate only if the user asks about scheduling, availability, or if no clear answer is found in the provided context.\n"
-                        # "- **continue_conversation** → If the topic allows for further discussion, offer additional insights or ask if the user would like more details.\n"
-                        # "- **out_of_scope** → If the user's question is unrelated, acknowledge it politely and redirect the conversation back to relevant topics.\n\n"
-
-                        # "**Handling Out-of-Scope Questions:**\n"
-                        # "If a user asks something unrelated, respond in a way that maintains a natural flow:\n"
-                        # "👤 User: 'What's the best Italian restaurant nearby?'\n"
-                        # "💬 Response: 'That sounds like a great topic! While I don't have restaurant recommendations, I'd be happy to assist with [specific topic]. Let me know how I can help!'\n\n"
-
-                        # "If the user continues with off-topic questions, acknowledge their curiosity but steer the conversation back in a professional and engaging manner."
-                        # "DO NOT USE EMOTICONS OR EMOJIS IN YOUR RESPONSES EVER.\n\n"
-                    )
+                    "content": (prompts[prompt_id])
                 },
-                {"role": "user", "content": message_history}
+                *[{"role": msg["role"], "content": msg["message"]} for msg in message_history]
             ],
             response_format=Response,
             max_tokens=16384
         )
+
+        parsed_response = response.choices[0].message.parsed
+        token_usage = response.usage.to_dict()
+
+        total_response_tokens = token_usage.get("total_tokens", 0)
+
+        return {
+            "response": parsed_response.response,
+            "token_usage": {
+                "total_tokens": total_response_tokens
+            }
+        }
+
     except Exception as e:
         logger.error(f"Error generating response: {e}")
         return jsonify({"error": str(e)}), 400
@@ -382,12 +380,13 @@ async def send_ai_message():
     try:
         data = await request.json
         prospect_id = data.get("prospect_id")
-        message = data.get("message")
+        prompt_id = data.get("prompt_id")
 
-        if not all([prospect_id, message]):
-            return jsonify({"error": "Missing required fields"}), 400
+        if not all([prospect_id, prompt_id]):
+            return jsonify({"error": "Missing required fields: prospect_id and prompt_id"}), 400
 
         url = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/sms'
+        comm_history = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/communication'
 
         headers = {
             "Content-Type": "application/json",
@@ -395,18 +394,70 @@ async def send_ai_message():
             "On-Behalf-Of": "rkataoka@bisuhomeloans.com"
         }
 
-        payload = {
-            "message": message,
-            "send_as": "owner"
-        }
+        message_history = []
 
-        response = requests.post(url, headers=headers, json=payload)
+        async with aiohttp.ClientSession() as session:
+            try:
+                # Get communication history
+                async with session.get(comm_history, headers=headers) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch communication history: {response.status}")
+                        return jsonify({"error": f"Failed to fetch communication history: {response.status}"}), 500
 
-        return response.json()
+                    response_data = await response.json()
+                    data = response_data.get("data")
+
+                    if not data:
+                        logger.warning(f"No communication history found for prospect {prospect_id}")
+                        return jsonify({"error": "No communication history found"}), 404
+
+                    # Build message history
+                    for item in data:
+                        if item.get("content"):  # Only add messages with content
+                            message_history.append({
+                                "role": "user" if item.get("direction") == "incoming" else "assistant",
+                                "message": item.get("content")
+                            })
+
+                if not message_history:
+                    logger.warning(f"No valid messages found in communication history for prospect {prospect_id}")
+                    return jsonify({"error": "No valid messages found in communication history"}), 404
+
+                # Generate GPT response
+                gpt_response_data = await gpt_response_2(message_history, prompt_id)
+
+                if "error" in gpt_response_data:
+                    logger.error(f"GPT response generation failed: {gpt_response_data['error']}")
+                    return jsonify({"error": "Failed to generate AI response"}), 500
+
+                # Send message
+                payload = {
+                    "message": gpt_response_data["response"],
+                    "send_as": "owner"
+                }
+
+                async with session.post(url, headers=headers, json=payload) as send_response:
+                    if send_response.status != 200:
+                        logger.error(f"Failed to send message: {send_response.status}")
+                        return jsonify({"error": f"Failed to send message: {send_response.status}"}), 500
+
+                    send_response_data = await send_response.json()
+                    return jsonify({
+                        "success": True,
+                        "message_sent": gpt_response_data["response"],
+                        "bonzo_response": send_response_data
+                    }), 200
+
+            except aiohttp.ClientError as e:
+                logger.error(f"HTTP client error: {e}")
+                return jsonify({"error": "Network error occurred"}), 500
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {e}")
+                return jsonify({"error": "Invalid response format from API"}), 500
 
     except Exception as e:
-        logger.error(f"Error sending message: {e}")
-        return jsonify({"error": str(e)}), 400
+        logger.error(f"Unexpected error in send_ai_message: {e}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 # For deployment with Modal
 @modal_app.function(
