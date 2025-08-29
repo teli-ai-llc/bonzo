@@ -343,17 +343,36 @@ async def message_teli_data():
 class Response(BaseModel):
     response: str
 
-async def gpt_response_2(message_history, prompt_id) -> dict:
+async def gpt_response_2(message_history, prospect_data, notes_content, prompt_id) -> dict:
     try:
+        messages = [
+            {
+                "role": "system",
+                "content": prompts[prompt_id]
+            }
+        ]
+
+        # Add prospect data as context if available
+        if prospect_data:
+            messages.append({
+                "role": "system",
+                "content": f"Prospect Data: {json.dumps(prospect_data)}"
+            })
+
+        # Add prospect notes if available
+        if notes_content:
+            messages.append({
+                "role": "system",
+                "content": f"Prospect Notes: {json.dumps(notes_content)}"
+            })
+
+        # Add message history (filter out messages with empty content)
+        valid_messages = [msg for msg in message_history if msg.get("content") and msg.get("content").strip()]
+        messages.extend(valid_messages)
+
         response = await aclient.beta.chat.completions.parse(
             model="gpt-4.1-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (prompts[prompt_id])
-                },
-                *[{"role": msg["role"], "content": msg["message"]} for msg in message_history]
-            ],
+            messages=messages,
             response_format=Response,
             max_tokens=16384
         )
@@ -372,7 +391,7 @@ async def gpt_response_2(message_history, prompt_id) -> dict:
 
     except Exception as e:
         logger.error(f"Error generating response: {e}")
-        return jsonify({"error": str(e)}), 400
+        return {"error": str(e)}
 
 @quart_app.route('/send_ai_message', methods=['POST'])
 @require_api_key
@@ -387,6 +406,8 @@ async def send_ai_message():
 
         url = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/sms'
         comm_history = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/communication'
+        prospect_info = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}'
+        prospect_notes = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/notes'
 
         headers = {
             "Content-Type": "application/json",
@@ -416,15 +437,39 @@ async def send_ai_message():
                         if item.get("content"):  # Only add messages with content
                             message_history.append({
                                 "role": "user" if item.get("direction") == "incoming" else "assistant",
-                                "message": item.get("content")
+                                "content": item.get("content")
                             })
 
                 if not message_history:
                     logger.warning(f"No valid messages found in communication history for prospect {prospect_id}")
                     return jsonify({"error": "No valid messages found in communication history"}), 404
 
+                # Get prospect data
+                async with session.get(prospect_info, headers=headers) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch prospect info: {response.status}")
+                        return jsonify({"error": f"Failed to fetch prospect info: {response.status}"}), 500
+
+                    res = await response.json()
+                    prospect_data = res.get("data")
+
+                if not prospect_data:
+                    logger.warning(f"No prospect info found for prospect {prospect_id}")
+                    return jsonify({"error": "No prospect info found"}), 404
+
+                # Get prospect notes
+                notes_content = []
+                async with session.get(prospect_notes, headers=headers) as response:
+                    if response.status == 200:
+                        notes_response = await response.json()
+                        notes_data = notes_response.get("data", [])
+                        # Extract just the content from each note
+                        notes_content = [note.get("content", "") for note in notes_data if note.get("content")]
+                    else:
+                        logger.warning(f"Failed to fetch prospect notes: {response.status}")
+
                 # Generate GPT response
-                gpt_response_data = await gpt_response_2(message_history, prompt_id)
+                gpt_response_data = await gpt_response_2(message_history, prospect_data, notes_content, prompt_id)
 
                 if "error" in gpt_response_data:
                     logger.error(f"GPT response generation failed: {gpt_response_data['error']}")
@@ -441,11 +486,11 @@ async def send_ai_message():
                         logger.error(f"Failed to send message: {send_response.status}")
                         return jsonify({"error": f"Failed to send message: {send_response.status}"}), 500
 
-                    send_response_data = await send_response.json()
+                    await send_response.json()
                     return jsonify({
                         "success": True,
                         "message_sent": gpt_response_data["response"],
-                        "bonzo_response": send_response_data
+                        # "token_usage": gpt_response_data["token_usage"]
                     }), 200
 
             except aiohttp.ClientError as e:
