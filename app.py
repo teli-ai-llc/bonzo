@@ -400,9 +400,11 @@ async def send_ai_message():
         data = await request.json
         prospect_id = data.get("prospect_id")
         prompt_id = data.get("prompt_id")
+        on_behalf_of = data.get("on_behalf_of")
+        auth_token = data.get("auth_token")
 
-        if not all([prospect_id, prompt_id]):
-            return jsonify({"error": "Missing required fields: prospect_id and prompt_id"}), 400
+        if not all([prospect_id, prompt_id, on_behalf_of, auth_token]):
+            return jsonify({"error": "Missing required fields: prospect_id, prompt_id, on_behalf_of, and auth_token"}), 400
 
         url = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/sms'
         comm_history = f'https://app.getbonzo.com/api/v3/prospects/{prospect_id}/communication'
@@ -411,8 +413,8 @@ async def send_ai_message():
 
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiI4IiwianRpIjoiYzE0MzBmMzQ3NzY1NmU5ODQ0MDUwNjA2OTAxYTc3MTNhYTQ1NzcwZTgyMWEzZWIwOWI4ZGIxMjI2YjFiMTJiNjI5NDA5NGE2ZWI3ZmVhNDIiLCJpYXQiOjE3NTYzMTcxODkuNTg1MDUxLCJuYmYiOjE3NTYzMTcxODkuNTg1MDUzLCJleHAiOjE3ODc4NTMxODkuNTcyMjQyLCJzdWIiOiIyNzEyNiIsInNjb3BlcyI6WyJhY2Nlc3MtcHVibGljIiwiYWNjZXNzLWF1dGhlbnRpY2F0ZWQiLCJwcm9zcGVjdHMiLCJwaXBlbGluZXMiLCJjYW1wYWlnbnMiLCJtZXNzYWdpbmciLCJjb252ZXJzYXRpb25zIl19.Sj1Mz6dY4byhmUX80aGvsf5eTXWV2ggzAdKyrR8WcFAe9TZ2MHR5cm2Ljo2r2vbglI7Dr6haibcZbobhBGV3nOyQKQCmu5Dys0AcJppFyXTV_lF0E2yc4ZrDQDBV33PzKVah2_IG4Qt3fAPk4uh4exY13pKbU9pXk0kkH60dvbmnYLviNCEuBvSS-lmtACamMnrS6JVfAFbs7JH873ZCogeNefi0v0GVSs-zcYMLFBFwdsKSwOe0qjKCJUM-Lbzo5l_WiaN9KTsUCKc8zoJAqUSpgtb4U6m9lDb3hFZixOkZfF01CUGlk32SmtzLJKeHk6AgzEZAJeQuni1On88hI3PlSuOtGZeaQRExnM4LaB8wFwqbm-XN4jPAt3GqUu0KUTKXK21AuYGAsJYPYW1fAPk5WevRiiN7AiZ8XImqftPSBckb2Kp9p5qiedQVYSbK35vlF9Em64vtVRR65rkzE9zppkxR_1_nGiRDSPNt4BoVY2rCCzaEBUECxMmqUMsxL4ohOWDsStSKf7X_kh3sN2RGPQaEj0AhLGJpqRC7PrJ9JurxkBY85MZIdNHVDDbBQ_HUHItS96vD7tHo9Lc-eLhFMmp0NsNUQiazGhFSFfRWYilb0Vfg-4wX6_xiEwxMdJM4nbQV51uex10LE0WxjStF-Og0p5VOpkwiOFFKSzQ",
-            "On-Behalf-Of": "rkataoka@bisuhomeloans.com"
+            "Authorization": f"Bearer {auth_token}",
+            "On-Behalf-Of": on_behalf_of
         }
 
         message_history = []
@@ -483,6 +485,7 @@ async def send_ai_message():
 
                 async with session.post(url, headers=headers, json=payload) as send_response:
                     if send_response.status != 200:
+                        logger.error(f"Failed to send message: {await send_response.json()}")
                         logger.error(f"Failed to send message: {send_response.status}")
                         return jsonify({"error": f"Failed to send message: {send_response.status}"}), 500
 
